@@ -605,7 +605,13 @@ export default class HlsHandler extends Component {
 
         // 5) the video element or flash player is in a readyState of
         // at least HAVE_FUTURE_DATA
-        this.tech_.readyState() >= 1) {
+        this.tech_.readyState() >= 1 &&
+
+        // 6) automatic firstplay seek to latest media position for live
+        // is not disabled
+        this.tech._autoplay())
+
+        {
 
       // trigger the playlist loader to start "expired time"-tracking
       this.playlists.trigger('firstplay');
