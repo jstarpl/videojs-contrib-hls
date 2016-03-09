@@ -414,6 +414,10 @@ export default class HlsHandler extends Component {
     } else if (videojs.options.hls) {
       this.options_.withCredentials = videojs.options.hls.withCredentials;
     }
+    if (videojs.options.hls) {
+      this.options_.doNotSeekToLive = videojs.options.hls.doNotSeekToLive;
+      this.options_.customFetchKeys = videojs.options.hls.customFetchKeys;
+    }
     this.playlists = new Hls.PlaylistLoader(this.source_.src,
                                             this.options_.withCredentials);
 
@@ -609,7 +613,7 @@ export default class HlsHandler extends Component {
 
         // 6) automatic firstplay seek to latest media position for live
         // is not disabled
-        this.tech._autoplay())
+        !this.options_.doNotSeekToLive)
 
         {
 
@@ -1463,6 +1467,11 @@ export default class HlsHandler extends Component {
 
     // if there is a pending XHR or no segments, don't do anything
     if (this.keyXhr_) {
+      return;
+    }
+
+    if (typeof this.options_.customFetchKeys == "function") {
+      this.options_.customFetchKeys(this, segment, Hls);
       return;
     }
 
