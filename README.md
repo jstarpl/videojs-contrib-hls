@@ -4,6 +4,34 @@ Play back HLS with video.js, even where it's not natively supported.
 
 [![Build Status](https://travis-ci.org/videojs/videojs-contrib-hls.svg?branch=master)](https://travis-ci.org/videojs/videojs-contrib-hls)
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Getting Started](#getting-started)
+- [Documentation](#documentation)
+  - [Options](#options)
+    - [withCredentials](#withcredentials)
+  - [Runtime Properties](#runtime-properties)
+    - [hls.playlists.master](#hlsplaylistsmaster)
+    - [hls.playlists.media](#hlsplaylistsmedia)
+    - [hls.segmentXhrTime](#hlssegmentxhrtime)
+    - [hls.bandwidth](#hlsbandwidth)
+    - [hls.bytesReceived](#hlsbytesreceived)
+    - [hls.selectPlaylist](#hlsselectplaylist)
+    - [hls.xhr](#hlsxhr)
+  - [Events](#events)
+    - [loadedmetadata](#loadedmetadata)
+    - [loadedplaylist](#loadedplaylist)
+    - [mediachange](#mediachange)
+  - [In-Band Metadata](#in-band-metadata)
+- [Hosting Considerations](#hosting-considerations)
+  - [Testing](#testing)
+- [Release History](#release-history)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+
 ## Getting Started
 Download
 [videojs-contrib-hls](https://github.com/videojs/videojs-contrib-hls/releases)
@@ -166,6 +194,44 @@ the next segment. It is invoked by the tech immediately before a new
 segment is downloaded. You can override this function to provide your
 adaptive streaming logic. You must, however, be sure to return a valid
 media playlist object that is present in `player.hls.master`.
+
+#### hls.xhr
+Type: `function`
+
+The xhr function that is used by HLS internally is exposed on the per-
+player `hls` object. While it is possible, we do not recommend replacing
+the function with your own implementation. Instead, the `xhr` provides
+the ability to specify a `beforeRequest` function that will be called
+with an object containing the options that will be used to create the
+xhr request.
+
+Example:
+```javascript
+player.hls.xhr.beforeRequest = function(options) {
+  options.uri = options.uri.replace('example.com', 'foo.com');
+
+  return options;
+};
+```
+
+The global `videojs.Hls` also exposes an `xhr` property. Specifying a
+`beforeRequest` function on that will allow you to intercept the options
+for *all* requests in every player on a page.
+
+Example
+```javascript
+videojs.Hls.xhr.beforeRequest = function(options) {
+  /*
+   * Modifications to requests that will affect every player.
+   */
+
+  return options;
+};
+```
+
+For information on the type of options that you can modify see the
+documentation at [https://github.com/Raynos/xhr](https://github.com/Raynos/xhr).
+
 
 ### Events
 Standard HTML video events are handled by video.js automatically and
