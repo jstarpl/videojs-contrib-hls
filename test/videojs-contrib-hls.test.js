@@ -752,7 +752,7 @@ QUnit.test('starts downloading a segment on loadedmetadata', function() {
                     'the first segment is requested');
 });
 
-QUnit.test('always returns an empty buffered region when there are no SourceBuffers', function() {
+QUnit.test('return an empty buffered region when there are no SourceBuffers but a real MediaSource exists', function() {
   this.player.src({
     src: 'manifest/media.m3u8',
     type: 'application/vnd.apple.mpegurl'
@@ -778,11 +778,11 @@ QUnit.test('always returns an empty buffered region when there are no SourceBuff
               0,
               'empty TimeRanges returned');
 
-   // Simulate the condition with no media source
+   // Simulate the condition with no media source (ie. Flash)
   delete this.player.hls.mediaSource.mediaSource_;
 
-  QUnit.equal(this.player.tech_.hls.findBufferedRange_().length,
-              0,
+  QUnit.equal(this.player.tech_.hls.findBufferedRange_().end(0),
+              10,
               'empty TimeRanges returned');
 });
 
@@ -3361,6 +3361,78 @@ QUnit.test('selectPlaylist does not fail if getComputedStyle returns null', func
   this.player.tech_.hls.selectPlaylist();
   QUnit.ok(true, 'should not throw');
   window.getComputedStyle = oldGetComputedStyle;
+});
+
+QUnit.test('Allows specifying the beforeRequest functionon the player', function() {
+  let beforeRequestCalled = false;
+
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+  openMediaSource(this.player, this.clock);
+
+  this.player.hls.xhr.beforeRequest = function() {
+    beforeRequestCalled = true;
+  };
+  // master
+  standardXHRResponse(this.requests.shift());
+  // media
+  standardXHRResponse(this.requests.shift());
+
+  QUnit.ok(beforeRequestCalled, 'beforeRequest was called');
+});
+
+QUnit.test('Allows specifying the beforeRequest function globally', function() {
+  let beforeRequestCalled = false;
+
+  videojs.Hls.xhr.beforeRequest = function() {
+    beforeRequestCalled = true;
+  };
+
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+  openMediaSource(this.player, this.clock);
+  // master
+  standardXHRResponse(this.requests.shift());
+
+  QUnit.ok(beforeRequestCalled, 'beforeRequest was called');
+
+  delete videojs.Hls.xhr.beforeRequest;
+});
+
+QUnit.test('Allows overriding the global beforeRequest function', function() {
+  let beforeGlobalRequestCalled = 0;
+  let beforeLocalRequestCalled = 0;
+
+  videojs.Hls.xhr.beforeRequest = function() {
+    beforeGlobalRequestCalled++;
+  };
+
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+  openMediaSource(this.player, this.clock);
+
+  this.player.hls.xhr.beforeRequest = function() {
+    beforeLocalRequestCalled++;
+  };
+  // master
+  standardXHRResponse(this.requests.shift());
+  // media
+  standardXHRResponse(this.requests.shift());
+  // ts
+  standardXHRResponse(this.requests.shift());
+
+  QUnit.equal(beforeLocalRequestCalled, 2, 'local beforeRequest was called twice ' +
+                                           'for the media playlist and media');
+  QUnit.equal(beforeGlobalRequestCalled, 1, 'global beforeRequest was called once ' +
+                                            'for the master playlist');
+
+  delete videojs.Hls.xhr.beforeRequest;
 });
 
 QUnit.module('Buffer Inspection');
