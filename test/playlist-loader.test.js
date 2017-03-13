@@ -1,8 +1,9 @@
-import sinon from 'sinon';
 import QUnit from 'qunit';
 import PlaylistLoader from '../src/playlist-loader';
-import videojs from 'video.js';
 import xhrFactory from '../src/xhr';
+import { useFakeEnvironment } from './test-helpers';
+import window from 'global/window';
+
 // Attempts to produce an absolute URL to a given relative path
 // based on window.location.href
 const urlTo = function(path) {
@@ -14,73 +15,52 @@ const urlTo = function(path) {
 };
 
 QUnit.module('Playlist Loader', {
-  beforeEach() {
-    // fake XHRs
-    this.oldXHR = videojs.xhr.XMLHttpRequest;
-    this.sinonXhr = sinon.useFakeXMLHttpRequest();
-    this.requests = [];
-    this.sinonXhr.onCreate = (xhr) => {
-      // force the XHR2 timeout polyfill
-      xhr.timeout = null;
-      this.requests.push(xhr);
-    };
-
-    // fake timers
-    this.clock = sinon.useFakeTimers();
-    videojs.xhr.XMLHttpRequest = this.sinonXhr;
-
+  beforeEach(assert) {
+    this.env = useFakeEnvironment(assert);
+    this.clock = this.env.clock;
+    this.requests = this.env.requests;
     this.fakeHls = {
       xhr: xhrFactory()
     };
   },
   afterEach() {
-    this.sinonXhr.restore();
-    this.clock.restore();
-    videojs.xhr.XMLHttpRequest = this.oldXHR;
+    this.env.restore();
   }
 });
 
-QUnit.test('throws if the playlist url is empty or undefined', function() {
-  QUnit.throws(function() {
+QUnit.test('throws if the playlist url is empty or undefined', function(assert) {
+  assert.throws(function() {
     PlaylistLoader();
   }, 'requires an argument');
-  QUnit.throws(function() {
+  assert.throws(function() {
     PlaylistLoader('');
   }, 'does not accept the empty string');
 });
 
-QUnit.test('starts without any metadata', function() {
+QUnit.test('starts without any metadata', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
 
-  QUnit.strictEqual(loader.state, 'HAVE_NOTHING', 'no metadata has loaded yet');
+  loader.load();
+
+  assert.strictEqual(loader.state, 'HAVE_NOTHING', 'no metadata has loaded yet');
 });
 
-QUnit.test('starts with no expired time', function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
-
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXTINF:10,\n' +
-                              '0.ts\n');
-  QUnit.equal(loader.expired_,
-              0,
-              'zero seconds expired');
-});
-
-QUnit.test('requests the initial playlist immediately', function() {
-  /* eslint-disable no-unused-vars */
+QUnit.test('requests the initial playlist immediately', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
-  /* eslint-enable no-unused-vars */
 
-  QUnit.strictEqual(this.requests.length, 1, 'made a request');
-  QUnit.strictEqual(this.requests[0].url,
+  loader.load();
+
+  assert.strictEqual(this.requests.length, 1, 'made a request');
+  assert.strictEqual(this.requests[0].url,
                     'master.m3u8',
                     'requested the initial playlist');
 });
 
-QUnit.test('moves to HAVE_MASTER after loading a master playlist', function() {
+QUnit.test('moves to HAVE_MASTER after loading a master playlist', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
   let state;
+
+  loader.load();
 
   loader.on('loadedplaylist', function() {
     state = loader.state;
@@ -89,13 +69,15 @@ QUnit.test('moves to HAVE_MASTER after loading a master playlist', function() {
                               '#EXTM3U\n' +
                               '#EXT-X-STREAM-INF:\n' +
                               'media.m3u8\n');
-  QUnit.ok(loader.master, 'the master playlist is available');
-  QUnit.strictEqual(state, 'HAVE_MASTER', 'the state at loadedplaylist correct');
+  assert.ok(loader.master, 'the master playlist is available');
+  assert.strictEqual(state, 'HAVE_MASTER', 'the state at loadedplaylist correct');
 });
 
-QUnit.test('jumps to HAVE_METADATA when initialized with a media playlist', function() {
+QUnit.test('jumps to HAVE_METADATA when initialized with a media playlist', function(assert) {
   let loadedmetadatas = 0;
   let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('loadedmetadata', function() {
     loadedmetadatas++;
@@ -105,31 +87,244 @@ QUnit.test('jumps to HAVE_METADATA when initialized with a media playlist', func
                              '#EXTINF:10,\n' +
                              '0.ts\n' +
                              '#EXT-X-ENDLIST\n');
-  QUnit.ok(loader.master, 'infers a master playlist');
-  QUnit.ok(loader.media(), 'sets the media playlist');
-  QUnit.ok(loader.media().uri, 'sets the media playlist URI');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
-  QUnit.strictEqual(this.requests.length, 0, 'no more requests are made');
-  QUnit.strictEqual(loadedmetadatas, 1, 'fired one loadedmetadata');
+  assert.ok(loader.master, 'infers a master playlist');
+  assert.ok(loader.media(), 'sets the media playlist');
+  assert.ok(loader.media().uri, 'sets the media playlist URI');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
+  assert.strictEqual(this.requests.length, 0, 'no more requests are made');
+  assert.strictEqual(loadedmetadatas, 1, 'fired one loadedmetadata');
+});
+
+QUnit.test('resolves relative media playlist URIs', function(assert) {
+  let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'video/media.m3u8\n');
+  assert.equal(loader.master.playlists[0].resolvedUri, urlTo('video/media.m3u8'),
+              'resolved media URI');
+});
+
+QUnit.test('playlist loader returns the correct amount of enabled playlists', function(assert) {
+  let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'video1/media.m3u8\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'video2/media.m3u8\n');
+  assert.equal(loader.enabledPlaylists_(), 2, 'Returned initial amount of playlists');
+  loader.master.playlists[0].excludeUntil = Date.now() + 100000;
+  this.clock.tick(1000);
+  assert.equal(loader.enabledPlaylists_(), 1, 'Returned one less playlist');
+});
+
+QUnit.test('playlist loader detects if we are on lowest rendition', function(assert) {
+  let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'video1/media.m3u8\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'video2/media.m3u8\n');
+  loader.media = function() {
+    return {attributes: {BANDWIDTH: 10}};
+  };
+
+  loader.master.playlists = [{attributes: {BANDWIDTH: 10}},
+                              {attributes: {BANDWIDTH: 20}}];
+  assert.ok(loader.isLowestEnabledRendition_(), 'Detected on lowest rendition');
+
+  loader.master.playlists = [{attributes: {BANDWIDTH: 10}},
+                              {attributes: {BANDWIDTH: 10}},
+                              {attributes: {BANDWIDTH: 10}},
+                              {attributes: {BANDWIDTH: 20}}];
+  assert.ok(loader.isLowestEnabledRendition_(), 'Detected on lowest rendition');
+
+  loader.media = function() {
+    return {attributes: {BANDWIDTH: 20}};
+  };
+
+  loader.master.playlists = [{attributes: {BANDWIDTH: 10}},
+                              {attributes: {BANDWIDTH: 20}}];
+  assert.ok(!loader.isLowestEnabledRendition_(), 'Detected not on lowest rendition');
+});
+
+QUnit.test('resolves media initialization segment URIs', function(assert) {
+  let loader = new PlaylistLoader('video/fmp4.m3u8', this.fakeHls);
+
+  loader.load();
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-MAP:URI="main.mp4",BYTERANGE="720@0"\n' +
+                                '#EXTINF:10,\n' +
+                                '0.ts\n' +
+                                '#EXT-X-ENDLIST\n');
+
+  assert.equal(loader.media().segments[0].map.resolvedUri, urlTo('video/main.mp4'),
+              'resolved init segment URI');
+});
+
+QUnit.test('recognizes absolute URIs and requests them unmodified', function(assert) {
+  let loader = new PlaylistLoader('manifest/media.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                'http://example.com/video/media.m3u8\n');
+  assert.equal(loader.master.playlists[0].resolvedUri,
+              'http://example.com/video/media.m3u8', 'resolved media URI');
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXTINF:10,\n' +
+                                'http://example.com/00001.ts\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(loader.media().segments[0].resolvedUri,
+              'http://example.com/00001.ts', 'resolved segment URI');
+});
+
+QUnit.test('recognizes domain-relative URLs', function(assert) {
+  let loader = new PlaylistLoader('manifest/media.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:\n' +
+                                '/media.m3u8\n');
+  assert.equal(loader.master.playlists[0].resolvedUri,
+              window.location.protocol + '//' +
+              window.location.host + '/media.m3u8',
+              'resolved media URI');
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXTINF:10,\n' +
+                                '/00001.ts\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(loader.media().segments[0].resolvedUri,
+              window.location.protocol + '//' +
+              window.location.host + '/00001.ts',
+              'resolved segment URI');
+});
+
+QUnit.test('recognizes key URLs relative to master and playlist', function(assert) {
+  let loader = new PlaylistLoader('/video/media-encrypted.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=17\n' +
+                                'playlist/playlist.m3u8\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(loader.master.playlists[0].resolvedUri,
+        window.location.protocol + '//' +
+        window.location.host + '/video/playlist/playlist.m3u8',
+        'resolved media URI');
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-TARGETDURATION:15\n' +
+                                '#EXT-X-KEY:METHOD=AES-128,URI="keys/key.php"\n' +
+                                '#EXTINF:2.833,\n' +
+                                'http://example.com/000001.ts\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(loader.media().segments[0].key.resolvedUri,
+        window.location.protocol + '//' +
+        window.location.host + '/video/playlist/keys/key.php',
+        'resolved multiple relative paths for key URI');
+});
+
+QUnit.test('trigger an error event when a media playlist 404s', function(assert) {
+  let count = 0;
+  let loader = new PlaylistLoader('manifest/master.m3u8', this.fakeHls);
+
+  loader.load();
+
+  loader.on('error', function() {
+    count += 1;
+  });
+
+  // master
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=17\n' +
+                                'playlist/playlist.m3u8\n' +
+                                '#EXT-X-STREAM-INF:PROGRAM-ID=2,BANDWIDTH=170\n' +
+                                'playlist/playlist2.m3u8\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(count, 0,
+    'error not triggered before requesting playlist');
+
+  // playlist
+  this.requests.shift().respond(404);
+
+  assert.equal(count, 1,
+    'error triggered after playlist 404');
+});
+
+QUnit.test('recognizes absolute key URLs', function(assert) {
+  let loader = new PlaylistLoader('/video/media-encrypted.m3u8', this.fakeHls);
+
+  loader.load();
+
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=17\n' +
+                                'playlist/playlist.m3u8\n' +
+                                '#EXT-X-ENDLIST\n');
+  assert.equal(loader.master.playlists[0].resolvedUri,
+        window.location.protocol + '//' +
+        window.location.host + '/video/playlist/playlist.m3u8',
+        'resolved media URI');
+
+  this.requests.shift().respond(
+    200,
+    null,
+    '#EXTM3U\n' +
+    '#EXT-X-TARGETDURATION:15\n' +
+    '#EXT-X-KEY:METHOD=AES-128,URI="http://example.com/keys/key.php"\n' +
+    '#EXTINF:2.833,\n' +
+    'http://example.com/000001.ts\n' +
+    '#EXT-X-ENDLIST\n'
+  );
+  assert.equal(loader.media().segments[0].key.resolvedUri,
+              'http://example.com/keys/key.php', 'resolved absolute path for key URI');
 });
 
 QUnit.test('jumps to HAVE_METADATA when initialized with a live media playlist',
-function() {
+function(assert) {
   let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
                               '#EXTINF:10,\n' +
                               '0.ts\n');
-  QUnit.ok(loader.master, 'infers a master playlist');
-  QUnit.ok(loader.media(), 'sets the media playlist');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
+  assert.ok(loader.master, 'infers a master playlist');
+  assert.ok(loader.media(), 'sets the media playlist');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
 });
 
-QUnit.test('moves to HAVE_METADATA after loading a media playlist', function() {
+QUnit.test('moves to HAVE_METADATA after loading a media playlist', function(assert) {
   let loadedPlaylist = 0;
   let loadedMetadata = 0;
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('loadedplaylist', function() {
     loadedPlaylist++;
@@ -142,11 +337,11 @@ QUnit.test('moves to HAVE_METADATA after loading a media playlist', function() {
                               '#EXT-X-STREAM-INF:\n' +
                               'media.m3u8\n' +
                               'alt.m3u8\n');
-  QUnit.strictEqual(loadedPlaylist, 1, 'fired loadedplaylist once');
-  QUnit.strictEqual(loadedMetadata, 0, 'did not fire loadedmetadata');
-  QUnit.strictEqual(this.requests.length, 1, 'requests the media playlist');
-  QUnit.strictEqual(this.requests[0].method, 'GET', 'GETs the media playlist');
-  QUnit.strictEqual(this.requests[0].url,
+  assert.strictEqual(loadedPlaylist, 1, 'fired loadedplaylist once');
+  assert.strictEqual(loadedMetadata, 0, 'did not fire loadedmetadata');
+  assert.strictEqual(this.requests.length, 1, 'requests the media playlist');
+  assert.strictEqual(this.requests[0].method, 'GET', 'GETs the media playlist');
+  assert.strictEqual(this.requests[0].url,
                     urlTo('media.m3u8'),
                     'requests the first playlist');
 
@@ -154,15 +349,32 @@ QUnit.test('moves to HAVE_METADATA after loading a media playlist', function() {
                               '#EXTM3U\n' +
                               '#EXTINF:10,\n' +
                               '0.ts\n');
-  QUnit.ok(loader.master, 'sets the master playlist');
-  QUnit.ok(loader.media(), 'sets the media playlist');
-  QUnit.strictEqual(loadedPlaylist, 2, 'fired loadedplaylist twice');
-  QUnit.strictEqual(loadedMetadata, 1, 'fired loadedmetadata once');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
+  assert.ok(loader.master, 'sets the master playlist');
+  assert.ok(loader.media(), 'sets the media playlist');
+  assert.strictEqual(loadedPlaylist, 2, 'fired loadedplaylist twice');
+  assert.strictEqual(loadedMetadata, 1, 'fired loadedmetadata once');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
 });
 
-QUnit.test('moves to HAVE_CURRENT_METADATA when refreshing the playlist', function() {
+QUnit.test('defaults missing media groups for a media playlist', function(assert) {
+  let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
+  this.requests.pop().respond(200, null,
+                              '#EXTM3U\n' +
+                              '#EXTINF:10,\n' +
+                              '0.ts\n');
+
+  assert.ok(loader.master.mediaGroups.AUDIO, 'defaulted audio');
+  assert.ok(loader.master.mediaGroups.VIDEO, 'defaulted video');
+  assert.ok(loader.master.mediaGroups['CLOSED-CAPTIONS'], 'defaulted closed captions');
+  assert.ok(loader.master.mediaGroups.SUBTITLES, 'defaulted subtitles');
+});
+
+QUnit.test('moves to HAVE_CURRENT_METADATA when refreshing the playlist', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -170,15 +382,17 @@ QUnit.test('moves to HAVE_CURRENT_METADATA when refreshing the playlist', functi
                               '0.ts\n');
   // 10s, one target duration
   this.clock.tick(10 * 1000);
-  QUnit.strictEqual(loader.state, 'HAVE_CURRENT_METADATA', 'the state is correct');
-  QUnit.strictEqual(this.requests.length, 1, 'requested playlist');
-  QUnit.strictEqual(this.requests[0].url,
+  assert.strictEqual(loader.state, 'HAVE_CURRENT_METADATA', 'the state is correct');
+  assert.strictEqual(this.requests.length, 1, 'requested playlist');
+  assert.strictEqual(this.requests[0].url,
                     urlTo('live.m3u8'),
                     'refreshes the media playlist');
 });
 
-QUnit.test('returns to HAVE_METADATA after refreshing the playlist', function() {
+QUnit.test('returns to HAVE_METADATA after refreshing the playlist', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -190,189 +404,29 @@ QUnit.test('returns to HAVE_METADATA after refreshing the playlist', function() 
                               '#EXTM3U\n' +
                               '#EXTINF:10,\n' +
                               '1.ts\n');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'the state is correct');
 });
 
-QUnit.test('does not increment expired seconds before firstplay is triggered',
-function() {
-  let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                              '#EXTINF:10,\n' +
-                              '0.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '1.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '2.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '3.ts\n');
-  // 10s, one target duration
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:1\n' +
-                              '#EXTINF:10,\n' +
-                              '1.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '2.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '3.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '4.ts\n');
-  QUnit.equal(loader.expired_, 0, 'expired one segment');
-});
-
-QUnit.test('increments expired seconds after a segment is removed', function() {
-  let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-
-  loader.trigger('firstplay');
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                              '#EXTINF:10,\n' +
-                              '0.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '1.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '2.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '3.ts\n');
-  // 10s, one target duration
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:1\n' +
-                              '#EXTINF:10,\n' +
-                              '1.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '2.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '3.ts\n' +
-                              '#EXTINF:10,\n' +
-                              '4.ts\n');
-  QUnit.equal(loader.expired_, 10, 'expired one segment');
-});
-
-QUnit.test('increments expired seconds after a discontinuity', function() {
-  let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-
-  loader.trigger('firstplay');
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                              '#EXTINF:10,\n' +
-                              '0.ts\n' +
-                              '#EXTINF:3,\n' +
-                              '1.ts\n' +
-                              '#EXT-X-DISCONTINUITY\n' +
-                              '#EXTINF:4,\n' +
-                              '2.ts\n');
-  // 10s, one target duration
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:1\n' +
-                              '#EXTINF:3,\n' +
-                              '1.ts\n' +
-                              '#EXT-X-DISCONTINUITY\n' +
-                              '#EXTINF:4,\n' +
-                              '2.ts\n');
-  QUnit.equal(loader.expired_, 10, 'expired one segment');
-
-  // 10s, one target duration
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:2\n' +
-                              '#EXT-X-DISCONTINUITY\n' +
-                              '#EXTINF:4,\n' +
-                              '2.ts\n');
-  QUnit.equal(loader.expired_, 13, 'no expirations after the discontinuity yet');
-
-  // 10s, one target duration
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:3\n' +
-                              '#EXT-X-DISCONTINUITY-SEQUENCE:1\n' +
-                              '#EXTINF:10,\n' +
-                              '3.ts\n');
-  QUnit.equal(loader.expired_, 17, 'tracked expiration across the discontinuity');
-});
-
-QUnit.test('tracks expired seconds properly when two discontinuities expire at once',
-function() {
-  let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-
-  loader.trigger('firstplay');
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                              '#EXTINF:4,\n' +
-                              '0.ts\n' +
-                              '#EXT-X-DISCONTINUITY\n' +
-                              '#EXTINF:5,\n' +
-                              '1.ts\n' +
-                              '#EXT-X-DISCONTINUITY\n' +
-                              '#EXTINF:6,\n' +
-                              '2.ts\n' +
-                              '#EXTINF:7,\n' +
-                              '3.ts\n');
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:3\n' +
-                              '#EXT-X-DISCONTINUITY-SEQUENCE:2\n' +
-                              '#EXTINF:7,\n' +
-                              '3.ts\n');
-  QUnit.equal(loader.expired_, 4 + 5 + 6, 'tracked multiple expiring discontinuities');
-});
-
-QUnit.test('estimates expired if an entire window elapses between live playlist updates',
-function() {
-  let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-
-  loader.trigger('firstplay');
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                              '#EXTINF:4,\n' +
-                              '0.ts\n' +
-                              '#EXTINF:5,\n' +
-                              '1.ts\n');
-
-  this.clock.tick(10 * 1000);
-  this.requests.pop().respond(200, null,
-                              '#EXTM3U\n' +
-                              '#EXT-X-MEDIA-SEQUENCE:4\n' +
-                              '#EXTINF:6,\n' +
-                              '4.ts\n' +
-                              '#EXTINF:7,\n' +
-                              '5.ts\n');
-
-  QUnit.equal(loader.expired_,
-              4 + 5 + (2 * 10),
-              'made a very rough estimate of expired time');
-});
-
-QUnit.test('emits an error when an initial playlist request fails', function() {
+QUnit.test('emits an error when an initial playlist request fails', function(assert) {
   let errors = [];
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('error', function() {
     errors.push(loader.error);
   });
   this.requests.pop().respond(500);
 
-  QUnit.strictEqual(errors.length, 1, 'emitted one error');
-  QUnit.strictEqual(errors[0].status, 500, 'http status is captured');
+  assert.strictEqual(errors.length, 1, 'emitted one error');
+  assert.strictEqual(errors[0].status, 500, 'http status is captured');
 });
 
-QUnit.test('errors when an initial media playlist request fails', function() {
+QUnit.test('errors when an initial media playlist request fails', function(assert) {
   let errors = [];
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('error', function() {
     errors.push(loader.error);
@@ -382,20 +436,20 @@ QUnit.test('errors when an initial media playlist request fails', function() {
                               '#EXT-X-STREAM-INF:\n' +
                               'media.m3u8\n');
 
-  QUnit.strictEqual(errors.length, 0, 'emitted no errors');
+  assert.strictEqual(errors.length, 0, 'emitted no errors');
 
   this.requests.pop().respond(500);
 
-  QUnit.strictEqual(errors.length, 1, 'emitted one error');
-  QUnit.strictEqual(errors[0].status, 500, 'http status is captured');
+  assert.strictEqual(errors.length, 1, 'emitted one error');
+  assert.strictEqual(errors[0].status, 500, 'http status is captured');
 });
 
 // http://tools.ietf.org/html/draft-pantos-http-live-streaming-12#section-6.3.4
 QUnit.test('halves the refresh timeout if a playlist is unchanged since the last reload',
-function() {
-  /* eslint-disable no-unused-vars */
+function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-  /* eslint-enable no-unused-vars */
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -412,15 +466,17 @@ function() {
   // half the default target-duration
   this.clock.tick(5 * 1000);
 
-  QUnit.strictEqual(this.requests.length, 1, 'sent a request');
-  QUnit.strictEqual(this.requests[0].url,
+  assert.strictEqual(this.requests.length, 1, 'sent a request');
+  assert.strictEqual(this.requests[0].url,
                     urlTo('live.m3u8'),
                     'requested the media playlist');
 });
 
-QUnit.test('preserves segment metadata across playlist refreshes', function() {
+QUnit.test('preserves segment metadata across playlist refreshes', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
   let segment;
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -447,12 +503,14 @@ QUnit.test('preserves segment metadata across playlist refreshes', function() {
                               '#EXTINF:10,\n' +
                               '2.ts\n');
 
-  QUnit.deepEqual(loader.media().segments[0], segment, 'preserved segment attributes');
+  assert.deepEqual(loader.media().segments[0], segment, 'preserved segment attributes');
 });
 
-QUnit.test('clears the update timeout when switching quality', function() {
+QUnit.test('clears the update timeout when switching quality', function(assert) {
   let loader = new PlaylistLoader('live-master.m3u8', this.fakeHls);
   let refreshes = 0;
+
+  loader.load();
 
   // track the number of playlist refreshes triggered
   loader.on('mediaupdatetimeout', function() {
@@ -481,13 +539,13 @@ QUnit.test('clears the update timeout when switching quality', function() {
   // trigger a refresh
   this.clock.tick(10 * 1000);
 
-  QUnit.equal(1, refreshes, 'only one refresh was triggered');
+  assert.equal(1, refreshes, 'only one refresh was triggered');
 });
 
-QUnit.test('media-sequence updates are considered a playlist change', function() {
-  /* eslint-disable no-unused-vars */
+QUnit.test('media-sequence updates are considered a playlist change', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
-  /* eslint-enable no-unused-vars */
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -504,13 +562,15 @@ QUnit.test('media-sequence updates are considered a playlist change', function()
   // half the default target-duration
   this.clock.tick(5 * 1000);
 
-  QUnit.strictEqual(this.requests.length, 0, 'no request is sent');
+  assert.strictEqual(this.requests.length, 0, 'no request is sent');
 });
 
-QUnit.test('emits an error if a media refresh fails', function() {
+QUnit.test('emits an error if a media refresh fails', function(assert) {
   let errors = 0;
   let errorResponseText = 'custom error message';
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('error', function() {
     errors++;
@@ -524,15 +584,17 @@ QUnit.test('emits an error if a media refresh fails', function() {
   this.clock.tick(10 * 1000);
   this.requests.pop().respond(500, null, errorResponseText);
 
-  QUnit.strictEqual(errors, 1, 'emitted an error');
-  QUnit.strictEqual(loader.error.status, 500, 'captured the status code');
-  QUnit.strictEqual(loader.error.responseText,
+  assert.strictEqual(errors, 1, 'emitted an error');
+  assert.strictEqual(loader.error.status, 500, 'captured the status code');
+  assert.strictEqual(loader.error.responseText,
                     errorResponseText,
                     'captured the responseText');
 });
 
-QUnit.test('switches media playlists when requested', function() {
+QUnit.test('switches media playlists when requested', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -547,21 +609,23 @@ QUnit.test('switches media playlists when requested', function() {
                               'low-0.ts\n');
 
   loader.media(loader.master.playlists[1]);
-  QUnit.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
+  assert.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
                               '#EXT-X-MEDIA-SEQUENCE:0\n' +
                               '#EXTINF:10,\n' +
                               'high-0.ts\n');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'switched active media');
-  QUnit.strictEqual(loader.media(),
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'switched active media');
+  assert.strictEqual(loader.media(),
                     loader.master.playlists[1],
                     'updated the active media');
 });
 
-QUnit.test('can switch playlists immediately after the master is downloaded', function() {
+QUnit.test('can switch playlists immediately after the master is downloaded', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   loader.on('loadedplaylist', function() {
     loader.media('high.m3u8');
@@ -572,11 +636,13 @@ QUnit.test('can switch playlists immediately after the master is downloaded', fu
                               'low.m3u8\n' +
                               '#EXT-X-STREAM-INF:BANDWIDTH=2\n' +
                               'high.m3u8\n');
-  QUnit.equal(this.requests[0].url, urlTo('high.m3u8'), 'switched variants immediately');
+  assert.equal(this.requests[0].url, urlTo('high.m3u8'), 'switched variants immediately');
 });
 
-QUnit.test('can switch media playlists based on URI', function() {
+QUnit.test('can switch media playlists based on URI', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -591,21 +657,23 @@ QUnit.test('can switch media playlists based on URI', function() {
                               'low-0.ts\n');
 
   loader.media('high.m3u8');
-  QUnit.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
+  assert.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
                               '#EXT-X-MEDIA-SEQUENCE:0\n' +
                               '#EXTINF:10,\n' +
                               'high-0.ts\n');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'switched active media');
-  QUnit.strictEqual(loader.media(),
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'switched active media');
+  assert.strictEqual(loader.media(),
                     loader.master.playlists[1],
                     'updated the active media');
 });
 
-QUnit.test('aborts in-flight playlist refreshes when switching', function() {
+QUnit.test('aborts in-flight playlist refreshes when switching', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -620,14 +688,16 @@ QUnit.test('aborts in-flight playlist refreshes when switching', function() {
                               'low-0.ts\n');
   this.clock.tick(10 * 1000);
   loader.media('high.m3u8');
-  QUnit.strictEqual(this.requests[0].aborted, true, 'aborted refresh request');
-  QUnit.ok(!this.requests[0].onreadystatechange,
+  assert.strictEqual(this.requests[0].aborted, true, 'aborted refresh request');
+  assert.ok(!this.requests[0].onreadystatechange,
            'onreadystatechange handlers should be removed on abort');
-  QUnit.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
+  assert.strictEqual(loader.state, 'SWITCHING_MEDIA', 'updated the state');
 });
 
-QUnit.test('switching to the active playlist is a no-op', function() {
+QUnit.test('switching to the active playlist is a no-op', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -643,11 +713,13 @@ QUnit.test('switching to the active playlist is a no-op', function() {
                               '#EXT-X-ENDLIST\n');
   loader.media('low.m3u8');
 
-  QUnit.strictEqual(this.requests.length, 0, 'no requests are sent');
+  assert.strictEqual(this.requests.length, 0, 'no requests are sent');
 });
 
-QUnit.test('switching to the active live playlist is a no-op', function() {
+QUnit.test('switching to the active live playlist is a no-op', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -662,11 +734,13 @@ QUnit.test('switching to the active live playlist is a no-op', function() {
                               'low-0.ts\n');
   loader.media('low.m3u8');
 
-  QUnit.strictEqual(this.requests.length, 0, 'no requests are sent');
+  assert.strictEqual(this.requests.length, 0, 'no requests are sent');
 });
 
-QUnit.test('switches back to loaded playlists without re-requesting them', function() {
+QUnit.test('switches back to loaded playlists without re-requesting them', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -689,13 +763,15 @@ QUnit.test('switches back to loaded playlists without re-requesting them', funct
                               '#EXT-X-ENDLIST\n');
   loader.media('low.m3u8');
 
-  QUnit.strictEqual(this.requests.length, 0, 'no outstanding requests');
-  QUnit.strictEqual(loader.state, 'HAVE_METADATA', 'returned to loaded playlist');
+  assert.strictEqual(this.requests.length, 0, 'no outstanding requests');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'returned to loaded playlist');
 });
 
 QUnit.test('aborts outstanding requests if switching back to an already loaded playlist',
-function() {
+function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -712,24 +788,26 @@ function() {
   loader.media('high.m3u8');
   loader.media('low.m3u8');
 
-  QUnit.strictEqual(this.requests.length,
+  assert.strictEqual(this.requests.length,
                     1,
                     'requested high playlist');
-  QUnit.ok(this.requests[0].aborted,
+  assert.ok(this.requests[0].aborted,
           'aborted playlist request');
-  QUnit.ok(!this.requests[0].onreadystatechange,
+  assert.ok(!this.requests[0].onreadystatechange,
            'onreadystatechange handlers should be removed on abort');
-  QUnit.strictEqual(loader.state,
+  assert.strictEqual(loader.state,
                     'HAVE_METADATA',
                     'returned to loaded playlist');
-  QUnit.strictEqual(loader.media(),
+  assert.strictEqual(loader.media(),
                     loader.master.playlists[0],
                     'switched to loaded playlist');
 });
 
 QUnit.test('does not abort requests when the same playlist is re-requested',
-function() {
+function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -746,14 +824,16 @@ function() {
   loader.media('high.m3u8');
   loader.media('high.m3u8');
 
-  QUnit.strictEqual(this.requests.length, 1, 'made only one request');
-  QUnit.ok(!this.requests[0].aborted, 'request not aborted');
+  assert.strictEqual(this.requests.length, 1, 'made only one request');
+  assert.ok(!this.requests[0].aborted, 'request not aborted');
 });
 
-QUnit.test('throws an error if a media switch is initiated too early', function() {
+QUnit.test('throws an error if a media switch is initiated too early', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
 
-  QUnit.throws(function() {
+  loader.load();
+
+  assert.throws(function() {
     loader.media('high.m3u8');
   }, 'threw an error from HAVE_NOTHING');
 
@@ -766,21 +846,25 @@ QUnit.test('throws an error if a media switch is initiated too early', function(
 });
 
 QUnit.test('throws an error if a switch to an unrecognized playlist is requested',
-function() {
+function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
                               '#EXT-X-STREAM-INF:BANDWIDTH=1\n' +
                               'media.m3u8\n');
 
-  QUnit.throws(function() {
+  assert.throws(function() {
     loader.media('unrecognized.m3u8');
   }, 'throws an error');
 });
 
-QUnit.test('dispose cancels the refresh timeout', function() {
+QUnit.test('dispose cancels the refresh timeout', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -791,11 +875,13 @@ QUnit.test('dispose cancels the refresh timeout', function() {
   // a lot of time passes...
   this.clock.tick(15 * 1000);
 
-  QUnit.strictEqual(this.requests.length, 0, 'no refresh request was made');
+  assert.strictEqual(this.requests.length, 0, 'no refresh request was made');
 });
 
-QUnit.test('dispose aborts pending refresh requests', function() {
+QUnit.test('dispose aborts pending refresh requests', function(assert) {
   let loader = new PlaylistLoader('live.m3u8', this.fakeHls);
+
+  loader.load();
 
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -805,31 +891,39 @@ QUnit.test('dispose aborts pending refresh requests', function() {
   this.clock.tick(10 * 1000);
 
   loader.dispose();
-  QUnit.ok(this.requests[0].aborted, 'refresh request aborted');
-  QUnit.ok(!this.requests[0].onreadystatechange,
+  assert.ok(this.requests[0].aborted, 'refresh request aborted');
+  assert.ok(!this.requests[0].onreadystatechange,
            'onreadystatechange handler should not exist after dispose called'
   );
 });
 
-QUnit.test('errors if requests take longer than 45s', function() {
+QUnit.test('errors if requests take longer than 45s', function(assert) {
   let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
   let errors = 0;
+
+  loader.load();
 
   loader.on('error', function() {
     errors++;
   });
   this.clock.tick(45 * 1000);
 
-  QUnit.strictEqual(errors, 1, 'fired one error');
-  QUnit.strictEqual(loader.error.code, 2, 'fired a network error');
+  assert.strictEqual(errors, 1, 'fired one error');
+  assert.strictEqual(loader.error.code, 2, 'fired a network error');
 });
 
-QUnit.test('triggers an event when the active media changes', function() {
+QUnit.test('triggers an event when the active media changes', function(assert) {
   let loader = new PlaylistLoader('master.m3u8', this.fakeHls);
   let mediaChanges = 0;
+  let mediaChangings = 0;
+
+  loader.load();
 
   loader.on('mediachange', function() {
     mediaChanges++;
+  });
+  loader.on('mediachanging', function() {
+    mediaChangings++;
   });
   this.requests.pop().respond(200, null,
                               '#EXTM3U\n' +
@@ -843,10 +937,12 @@ QUnit.test('triggers an event when the active media changes', function() {
                                 '#EXTINF:10,\n' +
                                 'low-0.ts\n' +
                                 '#EXT-X-ENDLIST\n');
-  QUnit.strictEqual(mediaChanges, 0, 'initial selection is not a media change');
+  assert.strictEqual(mediaChangings, 0, 'initial selection is not a media changing');
+  assert.strictEqual(mediaChanges, 0, 'initial selection is not a media change');
 
   loader.media('high.m3u8');
-  QUnit.strictEqual(mediaChanges, 0, 'mediachange does not fire immediately');
+  assert.strictEqual(mediaChangings, 1, 'mediachanging fires immediately');
+  assert.strictEqual(mediaChanges, 0, 'mediachange does not fire immediately');
 
   this.requests.shift().respond(200, null,
                                 '#EXTM3U\n' +
@@ -854,165 +950,24 @@ QUnit.test('triggers an event when the active media changes', function() {
                                 '#EXTINF:10,\n' +
                                 'high-0.ts\n' +
                                 '#EXT-X-ENDLIST\n');
-  QUnit.strictEqual(mediaChanges, 1, 'fired a mediachange');
+  assert.strictEqual(mediaChangings, 1, 'still one mediachanging');
+  assert.strictEqual(mediaChanges, 1, 'fired a mediachange');
 
   // switch back to an already loaded playlist
   loader.media('low.m3u8');
-  QUnit.strictEqual(mediaChanges, 2, 'fired a mediachange');
+  assert.strictEqual(mediaChangings, 2, 'mediachanging fires');
+  assert.strictEqual(mediaChanges, 2, 'fired a mediachange');
 
   // trigger a no-op switch
   loader.media('low.m3u8');
-  QUnit.strictEqual(mediaChanges, 2, 'ignored a no-op media change');
+  assert.strictEqual(mediaChangings, 2, 'mediachanging ignored the no-op');
+  assert.strictEqual(mediaChanges, 2, 'ignored a no-op media change');
 });
 
-QUnit.test('can get media index by playback position for non-live videos', function() {
+QUnit.test('does not misintrepret playlists missing newlines at the end', function(assert) {
   let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
 
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                                '#EXTINF:4,\n' +
-                                '0.ts\n' +
-                                '#EXTINF:5,\n' +
-                                '1.ts\n' +
-                                '#EXTINF:6,\n' +
-                                '2.ts\n' +
-                                '#EXT-X-ENDLIST\n');
-
-  QUnit.equal(loader.getMediaIndexForTime_(-1),
-              0,
-              'the index is never less than zero');
-  QUnit.equal(loader.getMediaIndexForTime_(0), 0, 'time zero is index zero');
-  QUnit.equal(loader.getMediaIndexForTime_(3), 0, 'time three is index zero');
-  QUnit.equal(loader.getMediaIndexForTime_(10), 2, 'time 10 is index 2');
-  QUnit.equal(loader.getMediaIndexForTime_(22),
-              2,
-              'time greater than the length is index 2');
-});
-
-QUnit.test('returns the lower index when calculating for a segment boundary', function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
-
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:0\n' +
-                                '#EXTINF:4,\n' +
-                                '0.ts\n' +
-                                '#EXTINF:5,\n' +
-                                '1.ts\n' +
-                                '#EXT-X-ENDLIST\n');
-  QUnit.equal(loader.getMediaIndexForTime_(4), 1, 'rounds up exact matches');
-  QUnit.equal(loader.getMediaIndexForTime_(3.7), 0, 'rounds down');
-  QUnit.equal(loader.getMediaIndexForTime_(4.5), 1, 'rounds up at 0.5');
-});
-
-QUnit.test('accounts for non-zero starting segment time when calculating media index',
-function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
-
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:1001\n' +
-                                '#EXTINF:4,\n' +
-                                '1001.ts\n' +
-                                '#EXTINF:5,\n' +
-                                '1002.ts\n');
-  loader.media().segments[0].end = 154;
-
-  QUnit.equal(loader.getMediaIndexForTime_(0),
-              -1,
-              'the lowest returned value is  negative one');
-  QUnit.equal(loader.getMediaIndexForTime_(45),
-              -1,
-              'expired content returns negative one');
-  QUnit.equal(loader.getMediaIndexForTime_(75),
-              -1,
-              'expired content returns  negative one');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100),
-              0,
-              'calculates the earliest available position');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 2),
-              0,
-              'calculates within the first segment');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 4),
-              1,
-              'calculates within the second segment');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 4.5),
-              1,
-              'calculates within the second segment');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 6),
-              1,
-              'calculates within the second segment');
-});
-
-QUnit.test('prefers precise segment timing when tracking expired time', function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
-
-  loader.trigger('firstplay');
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:1001\n' +
-                                '#EXTINF:4,\n' +
-                                '1001.ts\n' +
-                                '#EXTINF:5,\n' +
-                                '1002.ts\n');
-  // setup the loader with an "imprecise" value as if it had been
-  // accumulating segment durations as they expire
-  loader.expired_ = 160;
-  // annotate the first segment with a start time
-  // this number would be coming from the Source Buffer in practice
-  loader.media().segments[0].end = 150;
-
-  QUnit.equal(loader.getMediaIndexForTime_(149),
-              0,
-              'prefers the value on the first segment');
-
-  // trigger a playlist refresh
-  this.clock.tick(10 * 1000);
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:1002\n' +
-                                '#EXTINF:5,\n' +
-                                '1002.ts\n');
-  QUnit.equal(loader.getMediaIndexForTime_(150 + 4 + 1),
-              0,
-              'tracks precise expired times');
-});
-
-QUnit.test('accounts for expired time when calculating media index', function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
-
-  this.requests.shift().respond(200, null,
-                                '#EXTM3U\n' +
-                                '#EXT-X-MEDIA-SEQUENCE:1001\n' +
-                                '#EXTINF:4,\n' +
-                                '1001.ts\n' +
-                                '#EXTINF:5,\n' +
-                                '1002.ts\n');
-  loader.expired_ = 150;
-
-  QUnit.equal(loader.getMediaIndexForTime_(0),
-              -1,
-              'expired content returns a negative index');
-  QUnit.equal(loader.getMediaIndexForTime_(75),
-              -1,
-              'expired content returns a negative index');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100),
-              0,
-              'calculates the earliest available position');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 2),
-              0,
-              'calculates within the first segment');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 4.5),
-              1,
-              'calculates within the second segment');
-  QUnit.equal(loader.getMediaIndexForTime_(50 + 100 + 6),
-              1,
-              'calculates within the second segment');
-});
-
-QUnit.test('does not misintrepret playlists missing newlines at the end', function() {
-  let loader = new PlaylistLoader('media.m3u8', this.fakeHls);
+  loader.load();
 
   // no newline
   this.requests.shift().respond(200, null,
@@ -1021,5 +976,5 @@ QUnit.test('does not misintrepret playlists missing newlines at the end', functi
                                 '#EXTINF:10,\n' +
                                 'low-0.ts\n' +
                                 '#EXT-X-ENDLIST');
-  QUnit.ok(loader.media().endList, 'flushed the final line of input');
+  assert.ok(loader.media().endList, 'flushed the final line of input');
 });

@@ -1,7 +1,23 @@
+/**
+ * @file bin-utils.js
+ */
+
+/**
+ * convert a TimeRange to text
+ *
+ * @param {TimeRange} range the timerange to use for conversion
+ * @param {Number} i the iterator on the range to convert
+ */
 const textRange = function(range, i) {
   return range.start(i) + '-' + range.end(i);
 };
 
+/**
+ * format a number as hex string
+ *
+ * @param {Number} e The number
+ * @param {Number} i the iterator
+ */
 const formatHexString = function(e, i) {
   let value = e.toString(16);
 
@@ -14,6 +30,39 @@ const formatAsciiString = function(e) {
   return '.';
 };
 
+/**
+ * Creates an object for sending to a web worker modifying properties that are TypedArrays
+ * into a new object with seperated properties for the buffer, byteOffset, and byteLength.
+ *
+ * @param {Object} message
+ *        Object of properties and values to send to the web worker
+ * @return {Object}
+ *         Modified message with TypedArray values expanded
+ * @function createTransferableMessage
+ */
+const createTransferableMessage = function(message) {
+  const transferable = {};
+
+  Object.keys(message).forEach((key) => {
+    const value = message[key];
+
+    if (ArrayBuffer.isView(value)) {
+      transferable[key] = {
+        bytes: value.buffer,
+        byteOffset: value.byteOffset,
+        byteLength: value.byteLength
+      };
+    } else {
+      transferable[key] = value;
+    }
+  });
+
+  return transferable;
+};
+
+/**
+ * utils to help dump binary data to the console
+ */
 const utils = {
   hexDump(data) {
     let bytes = Array.prototype.slice.call(data);
@@ -40,7 +89,8 @@ const utils = {
       result += textRange(ranges, i) + ' ';
     }
     return result;
-  }
+  },
+  createTransferableMessage
 };
 
 export default utils;

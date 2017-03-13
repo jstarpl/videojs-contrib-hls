@@ -1,42 +1,22 @@
-import document from 'global/document';
-/* eslint-disable max-len */
 /**
- * Constructs a new URI by interpreting a path relative to another
- * URI.
- * @param basePath {string} a relative or absolute URI
- * @param path {string} a path part to combine with the base
- * @return {string} a URI that is equivalent to composing `base`
- * with `path`
- * @see http://stackoverflow.com/questions/470832/getting-an-absolute-url-from-a-relative-one-ie6-issue
+ * @file resolve-url.js
  */
-/* eslint-enable max-len */
-const resolveUrl = function(basePath, path) {
-  // use the base element to get the browser to handle URI resolution
-  let oldBase = document.querySelector('base');
-  let docHead = document.querySelector('head');
-  let a = document.createElement('a');
-  let base = oldBase;
-  let oldHref;
-  let result;
 
-  // prep the document
-  if (oldBase) {
-    oldHref = oldBase.href;
-  } else {
-    base = docHead.appendChild(document.createElement('base'));
+import URLToolkit from 'url-toolkit';
+import window from 'global/window';
+
+const resolveUrl = function(baseURL, relativeURL) {
+  // return early if we don't need to resolve
+  if ((/^[a-z]+:/i).test(relativeURL)) {
+    return relativeURL;
   }
 
-  base.href = basePath;
-  a.href = path;
-  result = a.href;
-
-  // clean up
-  if (oldBase) {
-    oldBase.href = oldHref;
-  } else {
-    docHead.removeChild(base);
+  // if the base URL is relative then combine with the current location
+  if (!(/\/\//i).test(baseURL)) {
+    baseURL = URLToolkit.buildAbsoluteURL(window.location.href, baseURL);
   }
-  return result;
+
+  return URLToolkit.buildAbsoluteURL(baseURL, relativeURL);
 };
 
 export default resolveUrl;
